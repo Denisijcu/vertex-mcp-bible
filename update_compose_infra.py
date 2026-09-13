@@ -1,0 +1,88 @@
+compose_code = """version: '3.8'
+
+services:
+  api-gateway:
+    image: traefik:v3.0
+    container_name: mcp-api-gateway
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "8000:80"
+      - "8080:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - mcp_secure_net
+
+  mcp-recon:
+    build:
+      context: ../
+      dockerfile: servers/01-mcp-recon/Dockerfile
+    container_name: mcp-server-recon
+    ports:
+      - "8001:8000"
+    environment:
+      - MCP_SECRET=vertex-super-secret-key-2026
+    networks:
+      - mcp_secure_net
+    restart: unless-stopped
+
+  mcp-vector:
+    build:
+      context: ../
+      dockerfile: servers/02-mcp-vector/Dockerfile
+    container_name: mcp-server-vector
+    ports:
+      - "8002:8000"
+    environment:
+      - MCP_SECRET=vertex-super-secret-key-2026
+      - ANONYMIZED_TELEMETRY=False
+    volumes:
+      - chroma_persistence:/app/chroma_data
+    networks:
+      - mcp_secure_net
+    restart: unless-stopped
+
+  mcp-orchestrator:
+    build:
+      context: ../
+      dockerfile: servers/03-mcp-orchestrator/Dockerfile
+    container_name: mcp-server-orchestrator
+    ports:
+      - "8003:8000"
+    environment:
+      - MCP_SECRET=vertex-super-secret-key-2026
+    networks:
+      - mcp_secure_net
+    restart: unless-stopped
+
+  mcp-infra:
+    build:
+      context: ../
+      dockerfile: servers/04-mcp-infra/Dockerfile
+    container_name: mcp-server-infra
+    ports:
+      - "8004:8000"
+    environment:
+      - MCP_SECRET=vertex-super-secret-key-2026
+    # Montamos el socket en modo solo lectura (ro) para que pueda auditar
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - mcp_secure_net
+    restart: unless-stopped
+
+networks:
+  mcp_secure_net:
+    driver: bridge
+
+volumes:
+  chroma_persistence:
+"""
+
+with open("infra/docker-compose.yml", "w", encoding="utf-8", newline="\n") as f:
+    f.write(compose_code)
+print("[+] docker-compose.yml actualizado con mcp-infra (Puerto 8004).")
