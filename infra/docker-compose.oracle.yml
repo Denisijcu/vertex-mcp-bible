@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  oracle-db:
+    image: postgres:16-alpine
+    container_name: oracle-db-persist
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: vertex_secure_password_2026
+      POSTGRES_DB: oracle_ai_db
+    volumes:
+      - oracle_pg_data:/var/lib/postgresql/data
+    networks:
+      - mcp_secure_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d oracle_ai_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  oracle-core:
+    build:
+      context: ../oracle_backend
+      dockerfile: Dockerfile
+    container_name: oracle-core-api
+    ports:
+      - "8010:8010"
+    environment:
+      - DATABASE_URL=postgresql://postgres:vertex_secure_password_2026@oracle-db:5432/oracle_ai_db
+      - JWT_SECRET=vertex-oracle-secret-key-2026
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+    networks:
+      - mcp_secure_net
+    restart: unless-stopped
+
+volumes:
+  oracle_pg_data:
+
+networks:
+  mcp_secure_net:
+    external: true
