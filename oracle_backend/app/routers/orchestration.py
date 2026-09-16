@@ -4,6 +4,8 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from app.services.mcp_manager import mcp_service
+from app.services.mcp_executor import MCPProcessExecutor
+from app.services.synthesis_service import synthesize_report
 import os
 
 
@@ -114,4 +116,73 @@ async def sync_mcp_servers(request: Request):
         "status": "success",
         "synced_servers_count": count,
         "message": f"Sincronizados {count} servidores MCP correctamente con el Core."
+    }
+
+
+# =========================================================================
+# FASE 2 - Mision local: el backend ejecuta herramientas MCP locales (stdio)
+# y le pasa los resultados a Gemma para la sintesis. Gemma NO ejecuta tools,
+# solo analiza lo ya ejecutado -> sin loop de agente, sin timeout de LM Studio.
+# Reutiliza TASKS_DB y el polling de /mcp/tasks/{task_id}.
+# =========================================================================
+
+async def run_local_mission(task_id: str, body: dict):
+    TASKS_DB[task_id] = {"status": "RUNNING", "report": None}
+    try:
+        task = body.get("task", "")
+        invocations = body.get("invocations", []) or []
+        active = mcp_service.get_active_servers()
+
+        results = []
+        for inv in invocations:
+            server_name = inv.get("server_name")
+            tool_name = inv.get("tool_name")
+            arguments = inv.get("arguments", {}) or {}
+
+            if not server_name or server_name not in active:
+                results.append({
+                    "server": server_name, "tool": tool_name,
+                    "status": "error", "detail": "Server no activo o no sincronizado.",
+                })
+                continue
+
+            res = await MCPProcessExecutor.call_tool(
+                server_name, active[server_name], tool_name, arguments
+            )
+            results.append(res)
+
+        report = await synthesize_report(task, results)
+        TASKS_DB[task_id] = {
+            "status": "COMPLETED",
+            "report": report,
+            "raw_results": results,
+        }
+    except Exception as exc:
+        print(f"[LOCAL MISSION EXCEPTION] {repr(exc)}")
+        TASKS_DB[task_id] = {
+            "status": "FAILED",
+            "report": f"Error en mision local: {str(exc)}",
+        }
+
+
+@router.post("/local-mission/execute", status_code=202)
+async def local_mission(request: Request, background_tasks: BackgroundTasks):
+    """
+    Ejecuta una mision usando herramientas MCP locales + sintesis de Gemma.
+
+    Body esperado:
+      { "task": "analiza estos datos ...",
+        "invocations": [
+          {"server_name": "mi-calculadora", "tool_name": "media",
+           "arguments": {"lista": [10, 20, 30]}}
+        ] }
+    """
+    body = await request.json()
+    task_id = str(uuid.uuid4())
+    TASKS_DB[task_id] = {"status": "QUEUED", "report": None}
+    background_tasks.add_task(run_local_mission, task_id, body)
+    return {
+        "task_id": task_id,
+        "status": "QUEUED",
+        "message": "Mision local despachada (herramientas + sintesis).",
     }

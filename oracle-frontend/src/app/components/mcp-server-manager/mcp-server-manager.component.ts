@@ -87,15 +87,15 @@ interface ToolProp {
         <div class="invoke-selectors">
           <div class="invoke-field">
             <label>Servidor activo</label>
-            <select [(ngModel)]="invokeServer" (change)="loadTools()">
+            <select [(ngModel)]="invokeServer" (ngModelChange)="loadTools()">
               <option value="">-- Selecciona un server --</option>
-              <option *ngFor="let name of activeServerKeys" [value]="name">{{ name }}</option>
+              <option *ngFor="let name of activeServersSnapshot" [value]="name">{{ name }}</option>
             </select>
           </div>
 
           <div class="invoke-field" *ngIf="invokeTools.length > 0">
             <label>Herramienta ({{ invokeTools.length }})</label>
-            <select [(ngModel)]="invokeToolName" (change)="onToolChange()">
+            <select [(ngModel)]="invokeToolName" (ngModelChange)="onToolChange()">
               <option value="">-- Selecciona una tool --</option>
               <option *ngFor="let t of invokeTools" [value]="t.name">{{ t.name }}</option>
             </select>
@@ -104,13 +104,13 @@ interface ToolProp {
 
         <div *ngIf="isLoadingTools" class="invoke-hint">⏳ Abriendo sesión MCP y cargando herramientas...</div>
 
-        <div *ngIf="selectedToolDescription" class="tool-desc">
-          <small>{{ selectedToolDescription }}</small>
+        <div *ngIf="currentToolDescription" class="tool-desc">
+          <small>{{ currentToolDescription }}</small>
         </div>
 
         <!-- Formulario dinámico generado desde el input_schema de la tool -->
-        <div *ngIf="selectedToolProps.length > 0" class="args-form">
-          <div *ngFor="let prop of selectedToolProps" class="arg-field">
+        <div *ngIf="currentToolProps.length > 0" class="args-form">
+          <div *ngFor="let prop of currentToolProps; trackBy: trackByKey" class="arg-field">
             <label>
               {{ prop.key }}
               <span class="type-tag">{{ prop.type }}</span>
@@ -227,10 +227,13 @@ export class McpServerManagerComponent implements OnInit {
   hasJsonError = false;
 
   // --- Estado de la invocación directa ---
+  activeServersSnapshot: string[] = []; // snapshot estable para el dropdown (NO getter)
   invokeServer = '';
   invokeTools: any[] = [];
   invokeToolName = '';
   invokeArgs: { [key: string]: any } = {};
+  currentToolProps: ToolProp[] = [];    // calculado UNA vez al elegir tool (NO getter)
+  currentToolDescription = '';
   invokeResult: any = null;
   invokeError = '';
   isLoadingTools = false;
@@ -294,10 +297,8 @@ export class McpServerManagerComponent implements OnInit {
 
   updateActiveCount() {
     this.activeCount = this.serverKeys.filter(k => this.serverStates[k]).length;
-  }
-
-  get activeServerKeys(): string[] {
-    return this.serverKeys.filter(k => this.serverStates[k]);
+    // Refrescamos el snapshot del dropdown de invocacion (array estable)
+    this.activeServersSnapshot = this.serverKeys.filter(k => this.serverStates[k]);
   }
 
   saveConfiguration() {
@@ -342,10 +343,16 @@ export class McpServerManagerComponent implements OnInit {
 
   // --- Invocación directa ---
 
+  trackByKey(index: number, prop: ToolProp): string {
+    return prop.key;
+  }
+
   loadTools() {
     this.invokeTools = [];
     this.invokeToolName = '';
     this.invokeArgs = {};
+    this.currentToolProps = [];
+    this.currentToolDescription = '';
     this.invokeResult = null;
     this.invokeError = '';
     if (!this.invokeServer) { return; }
@@ -367,29 +374,30 @@ export class McpServerManagerComponent implements OnInit {
     });
   }
 
+  // Se ejecuta UNA sola vez al elegir la tool: calcula descripcion y campos del
+  // formulario y los guarda en campos fijos. Nada de getters recomputando en cada
+  // ciclo de deteccion de cambios (eso era lo que colgaba la pagina).
   onToolChange() {
     this.invokeArgs = {};
     this.invokeResult = null;
     this.invokeError = '';
-  }
+    this.currentToolProps = [];
+    this.currentToolDescription = '';
 
-  get selectedTool(): any {
-    return this.invokeTools.find(t => t.name === this.invokeToolName) || null;
-  }
+    const tool = this.invokeTools.find(t => t.name === this.invokeToolName);
+    if (!tool) { return; }
 
-  get selectedToolDescription(): string {
-    return this.selectedTool?.description || '';
-  }
+    this.currentToolDescription = tool.description || '';
 
-  get selectedToolProps(): ToolProp[] {
-    const schema = this.selectedTool?.input_schema;
-    if (!schema || !schema.properties) { return []; }
-    const required: string[] = schema.required || [];
-    return Object.keys(schema.properties).map(key => ({
-      key,
-      type: schema.properties[key].type || 'string',
-      required: required.includes(key)
-    }));
+    const schema = tool.input_schema;
+    if (schema && schema.properties) {
+      const required: string[] = schema.required || [];
+      this.currentToolProps = Object.keys(schema.properties).map(key => ({
+        key,
+        type: schema.properties[key].type || 'string',
+        required: required.includes(key)
+      }));
+    }
   }
 
   placeholderFor(type: string): string {
@@ -406,7 +414,7 @@ export class McpServerManagerComponent implements OnInit {
 
     // Coaccionamos cada argumento al tipo declarado en el schema
     const args: { [key: string]: any } = {};
-    for (const prop of this.selectedToolProps) {
+    for (const prop of this.currentToolProps) {
       const raw = this.invokeArgs[prop.key];
       if (raw === undefined || raw === '') { continue; }
 

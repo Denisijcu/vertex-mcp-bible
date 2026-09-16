@@ -40,3 +40,22 @@ testem.log
 # System files
 .DS_Store
 Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Variables de entorno / secretos (por si algun dia metes claves)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Cache de TypeScript y linters
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# Angular (cache completo, por si genera algo mas ademas de /cache)
+/.angular
