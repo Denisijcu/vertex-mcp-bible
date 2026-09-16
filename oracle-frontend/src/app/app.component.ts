@@ -8,6 +8,12 @@ import { Subscription, interval } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { McpServerManagerComponent } from './components/mcp-server-manager/mcp-server-manager.component';
 
+interface ToolProp {
+  key: string;
+  type: string;
+  required: boolean;
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -81,7 +87,11 @@ import { McpServerManagerComponent } from './components/mcp-server-manager/mcp-s
           </app-file-upload>
 
           <button class="btn-primary" (click)="runMission()" [disabled]="loading">
-            {{ loading ? 'EJECUTANDO ANÁLISIS PROFUNDO...' : 'LANZAR MISIÓN TÁCTICA' }}
+            {{ loading
+                ? 'EJECUTANDO ANÁLISIS PROFUNDO...'
+                : (localInvocations.length > 0
+                    ? '⚡ LANZAR MISIÓN LOCAL (' + localInvocations.length + ' tools)'
+                    : 'LANZAR MISIÓN TÁCTICA') }}
           </button>
 
           <!-- Atajos Rápidos -->
@@ -94,15 +104,65 @@ import { McpServerManagerComponent } from './components/mcp-server-manager/mcp-s
             </div>
           </div>
 
+          <!-- Constructor de Herramientas Locales (Fase 2) -->
+          <div class="local-tools-section">
+            <h3 (click)="toggleLocalTools()" class="collapsible-toggle">
+              ⚡ Herramientas Locales (MCP) {{ showLocalTools ? '▲' : '▼' }}
+              <span *ngIf="localInvocations.length > 0" class="local-count-badge">{{ localInvocations.length }}</span>
+            </h3>
+
+            <div class="local-tools-content" *ngIf="showLocalTools">
+              <p class="local-hint">Ejecuta tools de tus servers MCP y suma sus resultados a la misión. Al lanzar, Gemma sintetizará el reporte sobre ellos.</p>
+
+              <div class="form-group">
+                <label>Servidor</label>
+                <select [(ngModel)]="localSelectedServer" (ngModelChange)="onLocalServerChange()">
+                  <option value="">-- Selecciona --</option>
+                  <option *ngFor="let s of localServers" [value]="s">{{ s }}</option>
+                </select>
+              </div>
+
+              <div *ngIf="isLoadingLocalTools" class="local-hint">⏳ Abriendo sesión MCP y cargando herramientas...</div>
+
+              <div class="form-group" *ngIf="localTools.length > 0">
+                <label>Herramienta ({{ localTools.length }})</label>
+                <select [(ngModel)]="localSelectedTool" (ngModelChange)="onLocalToolChange()">
+                  <option value="">-- Selecciona --</option>
+                  <option *ngFor="let t of localTools" [value]="t.name">{{ t.name }}</option>
+                </select>
+              </div>
+
+              <div *ngIf="localToolDescription" class="local-tool-desc"><small>{{ localToolDescription }}</small></div>
+
+              <div *ngIf="localToolProps.length > 0" class="local-args">
+                <div *ngFor="let prop of localToolProps; trackBy: trackByKey" class="form-group">
+                  <label>{{ prop.key }} <span class="type-tag">{{ prop.type }}</span> <span *ngIf="prop.required" class="req">*</span></label>
+                  <input *ngIf="prop.type !== 'boolean'" [(ngModel)]="localArgs[prop.key]" [placeholder]="placeholderFor(prop.type)">
+                  <label *ngIf="prop.type === 'boolean'" class="checkbox-inline"><input type="checkbox" [(ngModel)]="localArgs[prop.key]"> activar</label>
+                </div>
+              </div>
+
+              <button *ngIf="localSelectedTool" class="btn-add-tool" (click)="addInvocation()">➕ Agregar a la misión</button>
+
+              <div *ngIf="localInvocations.length > 0" class="invocations-list">
+                <div *ngFor="let inv of localInvocations; let i = index" class="invocation-chip">
+                  <span class="inv-text">{{ inv.server_name }} → {{ inv.tool_name }}</span>
+                  <button class="btn-remove-inv" (click)="removeInvocation(i)" title="Quitar">✕</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Guía de Ayuda Colapsable -->
           <div class="help-section">
-            <h3 (click)="toggleHelp()" class="help-toggle">
+            <h3 (click)="toggleHelp()" class="collapsible-toggle">
               📖 Guía de Consultas Soportadas {{ showHelp ? '▲' : '▼' }}
             </h3>
             <div class="help-content" *ngIf="showHelp">
               <ul>
                 <li><strong>Auditorías de Red:</strong> Escaneos de puertos y vectores.</li>
                 <li><strong>Hardening:</strong> Validación de privilegios de usuario.</li>
+                <li><strong>Herramientas Locales:</strong> Suma resultados de tus servers MCP a la misión.</li>
                 <li><strong>Análisis de Voz:</strong> Dicta comandos directamente al micro.</li>
               </ul>
             </div>
@@ -168,21 +228,39 @@ import { McpServerManagerComponent } from './components/mcp-server-manager/mcp-s
     .btn-mic:hover { background: #334155; }
     .btn-mic.listening { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; color: #ef4444; animation: pulse 1.5s infinite; }
     @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-    input, textarea { width: 100%; background: #020617; border: 1px solid #334155; color: #e2e8f0; padding: 0.6rem; border-radius: 4px; font-family: inherit; font-size: 0.85rem; box-sizing: border-box; }
-    input:focus, textarea:focus { outline: none; border-color: #38bdf8; }
+    input, textarea, select { width: 100%; background: #020617; border: 1px solid #334155; color: #e2e8f0; padding: 0.6rem; border-radius: 4px; font-family: inherit; font-size: 0.85rem; box-sizing: border-box; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: #38bdf8; }
     .btn-primary { width: 100%; background: #0284c7; color: white; border: none; padding: 0.75rem; font-weight: bold; border-radius: 4px; cursor: pointer; font-family: inherit; transition: background 0.2s; margin-top: 0.5rem; }
     .btn-primary:hover { background: #0ea5e9; }
     .btn-primary:disabled { background: #475569; cursor: not-allowed; }
     .shortcuts-section { margin-top: 1.5rem; border-top: 1px solid #1e293b; padding-top: 1rem; }
-    .shortcuts-section h3, .help-section h3 { font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.5rem; text-transform: uppercase; }
+    .shortcuts-section h3, .help-section h3, .local-tools-section h3 { font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.5rem; text-transform: uppercase; }
     .chips-container { display: flex; flex-wrap: wrap; gap: 0.4rem; }
     .chip { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; padding: 0.3rem 0.6rem; font-size: 0.7rem; border-radius: 12px; cursor: pointer; font-family: inherit; transition: all 0.2s; }
     .chip:hover { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }
-    .help-section { margin-top: 1rem; border-top: 1px solid #1e293b; padding-top: 0.75rem; }
-    .help-toggle { cursor: pointer; user-select: none; }
-    .help-toggle:hover { color: #38bdf8; }
+    .help-section, .local-tools-section { margin-top: 1rem; border-top: 1px solid #1e293b; padding-top: 0.75rem; }
+    .collapsible-toggle { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.4rem; }
+    .collapsible-toggle:hover { color: #38bdf8; }
     .help-content ul { margin: 0.5rem 0 0 1rem; padding: 0; font-size: 0.75rem; color: #94a3b8; }
     .help-content li { margin-bottom: 0.3rem; }
+
+    /* --- Constructor de herramientas locales --- */
+    .local-count-badge { background: #0284c7; color: white; font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 10px; font-weight: bold; }
+    .local-tools-content { margin-top: 0.5rem; }
+    .local-hint { font-size: 0.7rem; color: #64748b; margin: 0 0 0.75rem 0; line-height: 1.4; }
+    .local-tool-desc { background: rgba(56, 189, 248, 0.08); border-left: 2px solid #38bdf8; padding: 0.3rem 0.5rem; margin-bottom: 0.75rem; }
+    .local-tool-desc small { color: #cbd5e1; font-size: 0.7rem; }
+    .type-tag { font-size: 0.6rem; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 0.05rem 0.3rem; border-radius: 3px; }
+    .req { color: #ef4444; font-weight: bold; }
+    .checkbox-inline { font-size: 0.72rem; color: #cbd5e1; display: flex; align-items: center; gap: 0.4rem; text-transform: none; }
+    .btn-add-tool { width: 100%; background: #1e293b; border: 1px solid #38bdf8; color: #38bdf8; padding: 0.5rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; font-family: inherit; font-weight: bold; }
+    .btn-add-tool:hover { background: rgba(56, 189, 248, 0.15); }
+    .invocations-list { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }
+    .invocation-chip { display: flex; justify-content: space-between; align-items: center; background: #020617; border: 1px solid #10b981; border-radius: 4px; padding: 0.3rem 0.5rem; }
+    .inv-text { font-size: 0.72rem; color: #10b981; word-break: break-all; }
+    .btn-remove-inv { background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: bold; padding: 0 0.3rem; }
+
+    .help-section { margin-top: 1rem; }
     .output-console { display: flex; flex-direction: column; }
     .console-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.5rem; margin-bottom: 1rem; }
     .console-header h3 { margin: 0; font-size: 0.9rem; color: #38bdf8; }
@@ -281,6 +359,18 @@ export class AppComponent implements OnInit, OnDestroy {
   currentView = 'mission';
   private pollSub?: Subscription;
 
+  // --- Constructor de mision local (fase 2) ---
+  showLocalTools = false;
+  localServers: string[] = [];
+  localSelectedServer = '';
+  localTools: any[] = [];
+  localSelectedTool = '';
+  localArgs: { [key: string]: any } = {};
+  localToolProps: ToolProp[] = [];
+  localToolDescription = '';
+  localInvocations: any[] = [];
+  isLoadingLocalTools = false;
+
 
   constructor(
     private oracleService: OracleService,
@@ -309,6 +399,108 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   toggleHelp() { this.showHelp = !this.showHelp; }
+
+  // --- Herramientas locales (fase 2) ---
+
+  trackByKey(index: number, prop: ToolProp): string { return prop.key; }
+
+  toggleLocalTools() {
+    this.showLocalTools = !this.showLocalTools;
+    // Cargamos los servers activos la primera vez que se abre el panel
+    if (this.showLocalTools && this.localServers.length === 0) {
+      this.oracleService.getActiveMcpServers().subscribe({
+        next: (res: any) => { this.localServers = Object.keys(res.active_servers || {}); },
+        error: () => { this.localServers = []; }
+      });
+    }
+  }
+
+  onLocalServerChange() {
+    this.localTools = [];
+    this.localSelectedTool = '';
+    this.localArgs = {};
+    this.localToolProps = [];
+    this.localToolDescription = '';
+    if (!this.localSelectedServer) { return; }
+
+    this.isLoadingLocalTools = true;
+    this.oracleService.listServerTools(this.localSelectedServer).subscribe({
+      next: (res: any) => {
+        this.isLoadingLocalTools = false;
+        if (res.status === 'success') { this.localTools = res.tools || []; }
+      },
+      error: () => { this.isLoadingLocalTools = false; }
+    });
+  }
+
+  onLocalToolChange() {
+    this.localArgs = {};
+    this.localToolProps = [];
+    this.localToolDescription = '';
+
+    const tool = this.localTools.find(t => t.name === this.localSelectedTool);
+    if (!tool) { return; }
+
+    this.localToolDescription = tool.description || '';
+    const schema = tool.input_schema;
+    if (schema && schema.properties) {
+      const required: string[] = schema.required || [];
+      this.localToolProps = Object.keys(schema.properties).map(key => ({
+        key,
+        type: schema.properties[key].type || 'string',
+        required: required.includes(key)
+      }));
+    }
+  }
+
+  placeholderFor(type: string): string {
+    if (type === 'array') { return 'CSV o JSON: 1,2,3'; }
+    if (type === 'integer' || type === 'number') { return 'número'; }
+    return type;
+  }
+
+  addInvocation() {
+    if (!this.localSelectedServer || !this.localSelectedTool) { return; }
+
+    const args: { [key: string]: any } = {};
+    for (const prop of this.localToolProps) {
+      const raw = this.localArgs[prop.key];
+      if (raw === undefined || raw === '') { continue; }
+
+      if (prop.type === 'number' || prop.type === 'integer') {
+        args[prop.key] = Number(raw);
+      } else if (prop.type === 'boolean') {
+        args[prop.key] = !!raw;
+      } else if (prop.type === 'array') {
+        try {
+          args[prop.key] = JSON.parse(raw);
+        } catch {
+          args[prop.key] = String(raw).split(',').map((s: string) => {
+            const n = Number(s.trim());
+            return isNaN(n) ? s.trim() : n;
+          });
+        }
+      } else {
+        args[prop.key] = raw;
+      }
+    }
+
+    this.localInvocations.push({
+      server_name: this.localSelectedServer,
+      tool_name: this.localSelectedTool,
+      arguments: args
+    });
+
+    // Reset del selector de tool para poder agregar otra rapido
+    this.localSelectedTool = '';
+    this.localArgs = {};
+    this.localToolProps = [];
+    this.localToolDescription = '';
+  }
+
+  removeInvocation(i: number) {
+    this.localInvocations.splice(i, 1);
+  }
 
   toggleVoiceCommand() {
     if (this.speechService.isListening) {
@@ -389,53 +581,67 @@ export class AppComponent implements OnInit, OnDestroy {
 
     console.log("🔥 Disparando misión desde Angular...");
 
-    const rawPrompt = this.taskDescription + this.fileContentPayload;
-    const finalPrompt = rawPrompt.replace(/[\r\n]+/g, ' ');
+    // Bifurcacion: si hay tools locales agregadas -> mision local (fase 2);
+    // si no -> mision dockerizada de siempre.
+    if (this.localInvocations.length > 0) {
+      this.oracleService.localMission(this.taskDescription, this.localInvocations).subscribe({
+        next: (res: any) => this.handleDispatch(res),
+        error: (err) => this.handleDispatchError(err)
+      });
+    } else {
+      const rawPrompt = this.taskDescription + this.fileContentPayload;
+      const finalPrompt = rawPrompt.replace(/[\r\n]+/g, ' ');
+      this.oracleService.executeTask(finalPrompt, this.targetIp).subscribe({
+        next: (res: any) => this.handleDispatch(res),
+        error: (err) => this.handleDispatchError(err)
+      });
+    }
+  }
 
-    this.oracleService.executeTask(finalPrompt, this.targetIp).subscribe({
-      next: (res: any) => {
-        const taskId = res.task_id;
-        if (!taskId) {
-          this.missionOutput = '[!] Error crítico: No se obtuvo el ID de la tarea.';
-          this.loading = false;
-          return;
-        }
+  private handleDispatch(res: any) {
+    const taskId = res.task_id;
+    if (!taskId) {
+      this.missionOutput = '[!] Error crítico: No se obtuvo el ID de la tarea.';
+      this.loading = false;
+      return;
+    }
+    this.currentStatusText = `ESTADO (RUNNING) [ID: ${taskId}]... Gemma procesando razonamiento profundo. Análisis en curso; el reporte se desplegará al concluir.`;
+    this.startPolling(taskId);
+  }
 
-        this.currentStatusText = `ESTADO (RUNNING) [ID: ${taskId}]... Gemma procesando razonamiento profundo. Análisis en curso; el reporte se desplegará al concluir.`;
+  private handleDispatchError(err: any) {
+    this.missionOutput = `[!] Error de conexión con OracleAI: ${err.statusText || 'Fallo de red'}`;
+    this.loading = false;
+  }
 
-        this.pollSub = interval(4000).pipe(
-          switchMap(() => this.oracleService.getTaskStatus(taskId)),
-          takeWhile((statusRes: any) => statusRes.status === 'QUEUED' || statusRes.status === 'RUNNING', true)
-        ).subscribe({
-          next: (statusRes: any) => {
-            if (statusRes.status === 'COMPLETED') {
-              let finalReport = statusRes.report;
-              if (typeof finalReport === 'string' && finalReport.includes("'report':")) {
-                const match = finalReport.match(/'report':\s*'(.*)'/s);
-                if (match && match[1]) {
-                  finalReport = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
-                }
-              }
-              this.missionOutput = finalReport || '[!] Reporte vacío.';
-              this.loading = false;
-
-              if (this.pollSub) this.pollSub.unsubscribe();
-            } else if (statusRes.status === 'FAILED') {
-              this.missionOutput = `[!] Fallo en la misión: ${statusRes.report}`;
-              this.loading = false;
-              if (this.pollSub) this.pollSub.unsubscribe();
-            } else {
-              this.currentStatusText = `ESTADO (${statusRes.status})... Gemma procesando razonamiento profundo. Misión en ejecución activa.`;
+  private startPolling(taskId: string) {
+    this.pollSub = interval(4000).pipe(
+      switchMap(() => this.oracleService.getTaskStatus(taskId)),
+      takeWhile((statusRes: any) => statusRes.status === 'QUEUED' || statusRes.status === 'RUNNING', true)
+    ).subscribe({
+      next: (statusRes: any) => {
+        if (statusRes.status === 'COMPLETED') {
+          let finalReport = statusRes.report;
+          if (typeof finalReport === 'string' && finalReport.includes("'report':")) {
+            const match = finalReport.match(/'report':\s*'(.*)'/s);
+            if (match && match[1]) {
+              finalReport = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
             }
-          },
-          error: (err) => {
-            this.missionOutput = `[!] Error de sondeo: ${err.statusText || 'Conexión interrumpida'}`;
-            this.loading = false;
           }
-        });
+          this.missionOutput = finalReport || '[!] Reporte vacío.';
+          this.loading = false;
+
+          if (this.pollSub) this.pollSub.unsubscribe();
+        } else if (statusRes.status === 'FAILED') {
+          this.missionOutput = `[!] Fallo en la misión: ${statusRes.report}`;
+          this.loading = false;
+          if (this.pollSub) this.pollSub.unsubscribe();
+        } else {
+          this.currentStatusText = `ESTADO (${statusRes.status})... Gemma procesando razonamiento profundo. Misión en ejecución activa.`;
+        }
       },
       error: (err) => {
-        this.missionOutput = `[!] Error de conexión con OracleAI: ${err.statusText || 'Fallo de red'}`;
+        this.missionOutput = `[!] Error de sondeo: ${err.statusText || 'Conexión interrumpida'}`;
         this.loading = false;
       }
     });

@@ -30,6 +30,11 @@ export class OracleService {
     return this.http.post(`${this.apiUrl}/mcp/servers/sync`, configPayload);
   }
 
+  // Devuelve los servidores MCP actualmente sincronizados/activos en el Core
+  getActiveMcpServers(): Observable<any> {
+    return this.http.get(`${this.apiUrl}/mcp-hub/servers/active`);
+  }
+
   // Lista las herramientas que expone un servidor MCP local (hace handshake stdio)
   listServerTools(serverName: string): Observable<any> {
     return this.http.post(`${this.apiUrl}/mcp-hub/servers/tools`, {
@@ -43,6 +48,14 @@ export class OracleService {
       server_name: serverName,
       tool_name: toolName,
       arguments: args
+    });
+  }
+
+  // Fase 2: mision local — el backend ejecuta varias tools MCP y Gemma sintetiza
+  localMission(task: string, invocations: any[]): Observable<any> {
+    return this.http.post(`${this.apiUrl}/mcp/local-mission/execute`, {
+      task: task,
+      invocations: invocations
     });
   }
 

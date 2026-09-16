@@ -49,9 +49,29 @@
 * Capítulo 9: VIC en el Edge — Red Team Físico y Despliegues Portátiles  
   * 9.1 Migración a Arquitecturas ARM  
   * 9.2 Bypass de Controles de Red Físicos  
-* Capítulo 10: Epílogo — El Manifiesto de Vertex Coders  
-  * 10.1 Las Lecciones de Trinchera  
-  * 10.2 El Legado para el Futuro  
+* Capítulo 10: El Backend Soberano — Cuando el Core Sale del Contenedor  
+  * 10.1 El Muro de Cristal: Windows contra el Contenedor Linux  
+  * 10.2 La Migración: del Contenedor Efímero al Proceso Soberano  
+  * 10.3 La Trinchera del Nombre Fantasma: host.docker.internal vs localhost  
+  * 10.4 El Core como Despachador Soberano (BFF)  
+* Capítulo 11: El Registro MCP Dinámico — Servidores stdio al Estilo Claude Desktop  
+  * 11.1 El Formato Universal: mcpServers.json  
+  * 11.2 El Gestor MCP: Registro Visual y Sincronización  
+  * 11.3 La Trinchera del Sync Fantasma  
+  * 11.4 Persistencia: Sobrevivir al Reinicio  
+* Capítulo 12: El Cliente MCP Real — El Handshake que lo Cambió Todo  
+  * 12.1 El Executor que Hablaba "Medio MCP"  
+  * 12.2 El Handshake del Protocolo stdio  
+  * 12.3 La Trinchera del Typosquat: Disciplina de Supply-Chain  
+  * 12.4 El SDK Oficial y la Herencia del Entorno  
+* Capítulo 13: Misiones Locales — Herramientas y Síntesis sin Agente  
+  * 13.1 El Rechazo del Agente Autónomo  
+  * 13.2 El Pipeline Determinístico: Ejecutar, luego Sintetizar  
+  * 13.3 Grounding: Gemma Analiza, No Inventa  
+  * 13.4 Asincronía y Sondeo  
+* Capítulo 14: Epílogo — El Manifiesto de Vertex Coders  
+  * 14.1 Las Lecciones de Trinchera  
+  * 14.2 El Legado para el Futuro  
 * Referencias y Marco de Trabajo  
 * Sobre el Autor
 
@@ -79,7 +99,7 @@ Se asume un conocimiento intermedio de Python, Docker, redes y conceptos básico
 
 ## Resumen
 
-Vertex MCP Bible documenta la arquitectura y despliegue del Vertex Intelligence Core (VIC), un ecosistema compuesto por cinco microservicios en contenedores aislados. A través de 10 capítulos, el libro detalla cómo orquestar agentes de IA locales mediante LangGraph, auditar infraestructuras Docker en Windows/WSL2 mediante puentes Socat, y defender el sistema frente al OWASP LLM Top 10\. Además, explora la evolución hacia el Red Teaming autónomo, la soberanía de datos en reposo y la portabilidad táctica del sistema en dispositivos Edge (ARM).
+Vertex MCP Bible documenta la arquitectura y despliegue del Vertex Intelligence Core (VIC), un ecosistema de ciberseguridad autónoma que opera en dos planos complementarios. El primero, blindado y air-gapped, orquesta cinco microservicios en contenedores aislados mediante LangGraph para auditar infraestructuras Docker en Windows/WSL2 a través de puentes Socat y defenderse frente al OWASP LLM Top 10. El segundo —el plano soberano— saca el Core del contenedor para empuñar un arsenal dinámico de servidores MCP locales: un registro de servidores al estilo Claude Desktop, un cliente stdio que respeta el handshake completo del protocolo, y un motor de misiones locales donde el modelo sintetiza informes sobre resultados reales sin caer en la trampa del agente autónomo. El libro recorre además la evolución hacia el Red Teaming autónomo, la soberanía de datos en reposo y la portabilidad táctica en dispositivos Edge (ARM), y no oculta las trincheras: desde el nombre de host fantasma que rompe la comunicación hasta la disciplina de cadena de suministro frente al typosquatting de dependencias.
 
 ## Introducción
 
@@ -637,7 +657,269 @@ Cuando el cliente impone controles como 802.1X (NAC) o MAC Filtering, VIC implem
 
 &nbsp;
 
-\#\# Capítulo 10: Epílogo — El Manifiesto de Vertex Coders
+## Capítulo 10: El Backend Soberano — Cuando el Core Sale del Contenedor
+
+Durante los primeros nueve capítulos, el Vertex Intelligence Core vivió enteramente dentro de Docker: seis nodos blindados, una red interna `mcp_secure_net` y un orquestador que jamás tocaba el sistema anfitrión. Ese aislamiento era una virtud. Pero la evolución del Core hacia un operador de herramientas dinámicas nos obligó a romper una frontera que creíamos sagrada: la del contenedor.
+
+Este capítulo documenta esa ruptura. No fue una decisión estética, sino una imposición de la física del sistema operativo.
+
+### 10.1 El Muro de Cristal: Windows contra el Contenedor Linux
+
+La nueva generación de servidores MCP de Vertex no vive en la red interna de Docker. Vive en el host, y se declara con rutas físicas del anfitrión Windows:
+
+```json
+{
+  "vertex-cyber-mcp": {
+    "command": "G:\\Astra\\vertex-cyber-mcp\\.venv\\Scripts\\python.exe",
+    "args": ["-m", "vertex_cyber_mcp.server"]
+  },
+  "tello": {
+    "command": "H:\\mcp-drone\\venv\\Scripts\\python.exe",
+    "args": ["H:\\mcp-drone\\tello_server.py"]
+  }
+}
+```
+
+Aquí está el muro de cristal: el orquestador de VIC corre dentro de un contenedor **Linux**. Un contenedor Linux no tiene una unidad `G:\` ni `H:\`, y no puede ejecutar un binario `.exe` de Windows. Por más que el grafo reciba la orden de invocar `vertex-cyber-mcp`, es ciego y manco frente a este arsenal. El demonio de Docker vive en su propia realidad, y las rutas del operador humano no existen en ella.
+
+La conclusión arquitectónica es ineludible: **para empuñar herramientas que viven en el host, el proceso que las invoca debe correr en el host.** No hay puente de red que resuelva una diferencia de sistema operativo a nivel de sistema de ficheros y de formato ejecutable.
+
+### 10.2 La Migración: del Contenedor Efímero al Proceso Soberano
+
+La solución fue extraer el `oracle_backend` de su contenedor y ejecutarlo de forma nativa sobre Windows con Uvicorn. En el `docker-compose.oracle.yml`, este servicio publicaba su API en el puerto 8010:
+
+```yaml
+oracle-core:
+    build:
+      context: ../oracle_backend
+    container_name: oracle-core-api
+    ports:
+      - "8010:8010"
+```
+
+Al sacarlo del contenedor surgió el primer roce de trinchera: el contenedor `oracle-core-api` seguía vivo, acaparando el puerto 8010. En Windows, Uvicorn con `SO_REUSEADDR` puede reportar que "levantó" en un puerto ya ocupado por Docker sin fallar de inmediato, dejando dos procesos peleándose las conexiones de forma impredecible. La lección: antes de levantar el backend soberano, se baja el contenedor, o se le asigna un puerto limpio (8015). El backend soberano corre sobre el intérprete Python nativo del anfitrión, con visión completa de `G:\` y `H:\` y capacidad de lanzar los `.exe` del arsenal.
+
+### 10.3 La Trinchera del Nombre Fantasma: host.docker.internal contra localhost
+
+El backend soberano seguía necesitando hablar con el grafo dockerizado (el orquestador en el puerto 8003). Cuando el backend vivía dentro de Docker, lo alcanzaba mediante un nombre especial:
+
+```python
+vic_orchestrator_url = "http://host.docker.internal:8003/api/v1/mcp/orchestrate/execute"
+```
+
+Al lanzar la primera misión desde el backend ya migrado, el sistema devolvió un error contundente:
+
+```
+[!] Fallo en la misión: Error de comunicación con VIC: [Errno 11004] getaddrinfo failed
+```
+
+`getaddrinfo failed` es un fallo de resolución de nombre, y el culpable es `host.docker.internal`. Ese nombre es un fantasma: **solo existe dentro de un contenedor Docker**, donde Docker Desktop lo inyecta apuntando al anfitrión. Desde un proceso nativo de Windows, ese nombre no resuelve a nada. Y no hace falta: desde el propio host, el orquestador ya está publicado en `localhost:8003` gracias al mapeo de puertos del contenedor.
+
+La corrección, blindada para servir en ambos mundos mediante una variable de entorno con valor por defecto seguro:
+
+```python
+# host.docker.internal solo resuelve DENTRO de un contenedor. Con el backend
+# soberano en el host, el orquestador se alcanza por localhost.
+orchestrator_host = os.getenv("VIC_ORCHESTRATOR_HOST", "localhost")
+vic_orchestrator_url = f"http://{orchestrator_host}:8003/api/v1/mcp/orchestrate/execute"
+```
+
+Un detalle mínimo — el nombre de un host — separaba una misión exitosa de un fallo total. Así son las trincheras de la ingeniería distribuida: el error no está en la lógica, sino en el mapa de la red que cambió bajo nuestros pies.
+
+### 10.4 El Core como Despachador Soberano (BFF)
+
+Con la migración, el `oracle_backend` dejó de ser un simple proxy del grafo y asumió un rol superior: el de **despachador soberano** (un patrón Backend-for-Frontend con inteligencia de enrutamiento). Ante cada orden, el Core decide el plano de ejecución:
+
+* **Misión de auditoría de infraestructura** → la reenvía al grafo dockerizado (8003), que opera en su burbuja air-gapped sobre `mcp_secure_net`.
+* **Invocación de una herramienta local** → la ejecuta él mismo, en el host, empuñando los servidores stdio del arsenal del operador.
+
+VIC pasó así de tener un único plano a tener dos, complementarios. El plano dockerizado conserva su blindaje para el reconocimiento de red y la auditoría de contenedores. El plano soberano aporta la capacidad de orquestar cualquier herramienta que el operador registre en su máquina. El contenedor dejó de ser una prisión y se convirtió en uno de dos brazos de un mismo cerebro.
+
+**Lección de trinchera:** el aislamiento por contenedor es un escudo, no un dogma. Cuando la misión exige tocar el suelo del sistema anfitrión, el ingeniero soberano sabe cuándo salir de la burbuja — y cómo hacerlo sin perder el blindaje del resto de la flota.
+
+---
+
+## Capítulo 11: El Registro MCP Dinámico — Servidores stdio al Estilo Claude Desktop
+
+Un backend soberano capaz de ejecutar herramientas del host no sirve de nada si no sabe qué herramientas existen. VIC necesitaba un registro: un catálogo vivo de servidores MCP que el operador pudiera declarar, activar y sincronizar sin recompilar nada. La respuesta fue adoptar un estándar que la industria ya había consolidado.
+
+### 11.1 El Formato Universal: mcpServers.json
+
+El ecosistema MCP converge en un formato de declaración de servidores que usan tanto Claude Desktop como LM Studio: un objeto `mcpServers` donde cada entrada define un `command`, sus `args` y, opcionalmente, sus variables de entorno (`env`):
+
+```json
+{
+  "mcpServers": {
+    "mi-calculadora": {
+      "command": "node",
+      "args": ["H:/mcp-calculator/server.js"]
+    },
+    "vertex-cyber-mcp": {
+      "command": "...python.exe",
+      "args": ["-m", "vertex_cyber_mcp.server"],
+      "env": {
+        "VCMCP_ALLOWED_ROOTS": "...",
+        "VCMCP_ENABLE_SEMGREP": "true"
+      }
+    }
+  }
+}
+```
+
+Adoptar este formato no fue un capricho de compatibilidad: significa que cualquier servidor MCP que el operador ya use en Claude Desktop o LM Studio funciona en VIC sin modificación. El registro es portable por diseño.
+
+### 11.2 El Gestor MCP: Registro Visual y Sincronización
+
+Sobre ese formato, VIC construyó el **Gestor MCP**, una vista del frontend Angular con dos paneles: un editor del `mcpServers.json` y una lista de servidores detectados, cada uno con un interruptor de activación. Un botón —"Sincronizar con Core"— envía al backend únicamente los servidores encendidos.
+
+El contrato es deliberadamente simple. El frontend filtra los activos y envía `{ mcpServers: {...} }`; el backend los extrae y los guarda:
+
+```python
+def sync_servers(self, config_payload: dict) -> int:
+    self.active_servers = config_payload.get("mcpServers", {})
+    # ... persistencia en disco ...
+    return len(self.active_servers)
+```
+
+### 11.3 La Trinchera del Sync Fantasma
+
+Durante la integración descubrimos que el botón "Sincronizar con Core" mentía. El componente registraba la intención en consola y mostraba un mensaje de éxito... pero la llamada HTTP real estaba comentada como un `// TODO`. El botón solo ejecutaba un `alert()`. Los servidores jamás salían del navegador, y del lado del backend `get_active_servers()` devolvía siempre un diccionario vacío.
+
+Es una trampa clásica: una interfaz que reporta éxito sobre una operación que nunca ocurrió. La corrección exigió inyectar el servicio HTTP en el componente y activar el envío real. La lección: un "éxito" en la UI no prueba nada; solo el dato viajando de extremo a extremo lo hace.
+
+### 11.4 Persistencia: Sobrevivir al Reinicio
+
+La segunda trinchera fue más silenciosa. Los servidores sincronizados vivían solo en la memoria del proceso backend. Cada reinicio —y en desarrollo hay muchos— vaciaba el registro, obligando a re-sincronizar a mano. El propio motor de síntesis, tras un reinicio, ejecutaba misiones contra un catálogo vacío y reportaba "servidor no activo" sobre herramientas que el operador creía cargadas.
+
+El registro ya escribía un fichero `mcpServers_active.json` en cada sincronización, pero nunca lo leía al arrancar. El cierre del círculo fue trivial y definitivo: cargar ese fichero en la construcción del servicio.
+
+```python
+def _load_from_disk(self) -> None:
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                self.active_servers = data
+    except Exception:
+        self.active_servers = {}
+```
+
+**Lección de trinchera:** el estado que solo vive en RAM es estado que se pierde. Un registro operativo debe sobrevivir al reinicio, o dejará de ser una fuente de verdad para convertirse en una fuente de sorpresas.
+
+---
+
+## Capítulo 12: El Cliente MCP Real — El Handshake que lo Cambió Todo
+
+Tener el registro de servidores era solo la mitad. La otra mitad —la que de verdad costó sangre— era hablarles bien. Un servidor MCP no es un script al que se le tira una línea y responde; es un participante de un protocolo con su propio ritual de apertura. Ignorar ese ritual fue el error que nos tuvo trancados.
+
+### 12.1 El Executor que Hablaba "Medio MCP"
+
+La primera versión del ejecutor de VIC hacía lo siguiente: lanzaba el proceso, le escribía un único mensaje `tools/list` por la entrada estándar, y usaba `communicate()` para cerrar el canal y esperar a que el proceso muriera.
+
+El problema es que un servidor MCP conforme a la especificación no funciona así, por dos razones:
+
+1. **Exige un handshake previo.** Antes de aceptar cualquier `tools/list` o `tools/call`, el servidor espera una secuencia de apertura. Pedirle herramientas en frío se ignora o se rechaza.
+2. **Es un proceso persistente.** No termina tras un mensaje; se queda vivo escuchando. Un `communicate()` que espera su muerte se queda esperando hasta el timeout.
+
+El síntoma era un cuelgue de quince segundos y una respuesta vacía. El ejecutor hablaba "medio MCP": la sintaxis del mensaje era correcta, pero el protocolo estaba incompleto.
+
+### 12.2 El Handshake del Protocolo stdio
+
+El diálogo MCP real sobre stdio sigue una coreografía estricta sobre una conexión que permanece abierta:
+
+```
+initialize                 →  (el servidor responde sus capacidades)
+notifications/initialized  →  (el cliente confirma)
+tools/list | tools/call    →  (recién ahora, operaciones)
+```
+
+Reconstruir este baile a mano es posible, pero frágil: el framing de los mensajes, el manejo de la conexión persistente y la concurrencia son fáciles de romper.
+
+### 12.3 La Trinchera del Typosquat: Disciplina de Supply-Chain
+
+La decisión correcta fue apoyarse en el SDK oficial de MCP en vez de reimplementar el protocolo. Pero al ir a instalarlo, un simple `pip install --dry-run mcp` encendió una alarma. La resolución de dependencias arrastraba paquetes con nombres inquietantes:
+
+```
+Collecting httpx2>=2.5.0
+Collecting httpcore2==2.13.0
+```
+
+`httpx2` y `httpcore2` no son las librerías HTTP conocidas —esas se llaman `httpx` y `httpcore`, sin el "2" al final. Añadir un dígito a un nombre popular es un patrón clásico de *typosquatting*, la técnica con la que se cuela código malicioso en cadenas de dependencias.
+
+No confirmamos que fueran maliciosas. Pero tampoco pudimos verificarlas como legítimas, y en un proyecto de ciberseguridad esa incertidumbre basta: ante la duda, la dependencia no entra. La verificación reveló que esos paquetes aparecían solo en la línea 2.x del SDK; la línea 1.x estable usaba `httpx` y `httpcore` normales, ya presentes en el entorno. La solución fue fijar la versión:
+
+```
+mcp>=1.28,<2
+```
+
+Con ese anclaje desaparecieron los paquetes sospechosos y quedó la línea estable, la misma API que usan Claude Desktop y LM Studio por dentro.
+
+La ironía es la mejor lección del capítulo: estábamos haciendo a mano, sobre nuestra propia máquina, exactamente el chequeo de cadena de suministro que VIC está diseñado para automatizar. La doctrina de la herramienta se aplicó a la construcción de la herramienta.
+
+### 12.4 El SDK Oficial y la Herencia del Entorno
+
+Con el SDK anclado, el ejecutor se convirtió en un cliente MCP real. El handshake y el ciclo de vida del proceso quedaron en manos de la librería:
+
+```python
+async with stdio_client(server_params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+        result = await session.call_tool(tool_name, arguments=arguments)
+```
+
+Quedaba un último detalle de trinchera, propio de Windows: los servidores stdio necesitan el entorno del sistema (el `PATH`, entre otras variables) para que sus binarios arranquen. Pasarles solo las variables personalizadas los dejaba sin contexto. La solución fue heredar el entorno completo del anfitrión y superponer las variables específicas de cada servidor.
+
+La prueba de fuego fue deliberadamente humilde: invocar la herramienta `factorial` de la calculadora con el argumento `5`. La respuesta —`120`— no tenía nada de espectacular, salvo que probaba que el handshake completo había ocurrido: proceso lanzado, protocolo negociado, herramienta invocada, resultado devuelto. El cliente por fin hablaba MCP entero.
+
+**Lección de trinchera:** un protocolo se respeta completo o no se respeta. Hablar "medio protocolo" produce fallos silenciosos que parecen bugs de red pero son bugs de contrato. Y cuando una dependencia huele mal, la disciplina de no instalarla vale más que la prisa de compilar.
+
+---
+
+## Capítulo 13: Misiones Locales — Herramientas y Síntesis sin Agente
+
+Con un cliente MCP funcional, VIC podía por fin ejecutar el arsenal del operador. La pregunta ya no era técnica sino de diseño: ¿quién decide qué herramientas usar y cómo se convierten sus resultados en inteligencia? La respuesta definió el carácter del sistema.
+
+### 13.1 El Rechazo del Agente Autónomo
+
+La tentación evidente era construir un agente: dejar que el modelo decidiera qué herramienta llamar, en un bucle de razonamiento. Se descartó, y por razones concretas, no dogmáticas.
+
+VIC nació precisamente para independizarse de las limitaciones de ejecutar herramientas dentro de LM Studio, donde las peticiones largas revientan por timeout. Un agente reintroducía ese mismo problema por otra puerta: sobre una GPU modesta, cada vuelta de razonamiento del modelo local toma minutos, y un bucle de agente encadena varias. Peor aún, un modelo de tamaño medio puede elegir la herramienta equivocada o pasarle argumentos torcidos. Para una herramienta de seguridad, eso es lo inaceptable: lentitud e imprevisibilidad. El determinismo vale más que la magia.
+
+### 13.2 El Pipeline Determinístico: Ejecutar, luego Sintetizar
+
+El diseño elegido separa tajantemente la ejecución del razonamiento. El backend ejecuta las herramientas que el operador seleccionó, recoge sus resultados, y hace **una sola** llamada al modelo para redactar el informe. El modelo no ejecuta nada; solo analiza lo que ya está masticado.
+
+```python
+async def run_local_mission(task_id, body):
+    results = []
+    for inv in body.get("invocations", []):
+        res = await MCPProcessExecutor.call_tool(
+            inv["server_name"], active[inv["server_name"]],
+            inv["tool_name"], inv.get("arguments", {})
+        )
+        results.append(res)
+    report = await synthesize_report(body.get("task", ""), results)
+    # ... guardar en TASKS_DB ...
+```
+
+La síntesis reutiliza la voz de VIC y llama a Gemma por el endpoint local, con una consigna explícita: basarse únicamente en los resultados entregados, sin inventar datos ausentes.
+
+### 13.3 Grounding: Gemma Analiza, No Inventa
+
+La validación fue reveladora. Se ejecutaron tres herramientas estadísticas sobre una serie de tiempos de respuesta con un valor claramente anómalo, y se le pidió al modelo detectar la anomalía. El informe usó los números exactos que las herramientas devolvieron —media 78.4, desviación 130.81— y señaló el valor 340 como anómalo, cuantificándolo como 4.33 veces la media. Nada inventado; todo derivado de datos reales.
+
+Aún más revelador fue el caso de fallo. En una corrida donde los servidores no estaban sincronizados, las herramientas devolvieron errores. En lugar de inventar latencias para cumplir con la consigna, el modelo reportó honestamente la ausencia de datos y correlacionó los fallos como un problema de disponibilidad. Ese comportamiento —negarse a alucinar cuando no hay datos— es exactamente lo que se le exige a una herramienta de seguridad, donde un reporte confiado sobre datos fantasma es peor que ningún reporte.
+
+### 13.4 Asincronía y Sondeo
+
+La síntesis local es lenta por naturaleza: el modelo tarda minutos. Bloquear la petición HTTP durante ese tiempo la condenaría al timeout. Por eso la misión local adopta el mismo patrón asíncrono que el grafo dockerizado: el backend encola la tarea, devuelve un identificador al instante, y el frontend sondea el estado (`QUEUED → RUNNING → COMPLETED`) hasta recibir el informe. La infraestructura de tareas y sondeo se reutilizó sin cambios: dos planos de ejecución, un solo mecanismo de seguimiento.
+
+**Lección de trinchera:** la autonomía no es un fin en sí mismo. Un pipeline determinístico donde el humano elige las herramientas y el modelo solo razona sobre resultados reales es más rápido, más predecible y más honesto que un agente que decide solo. En seguridad, saber exactamente qué se ejecutó vale más que la elegancia de que la máquina lo adivine.
+
+---
+
+\#\# Capítulo 14: Epílogo — El Manifiesto de Vertex Coders
 
 &nbsp;
 
