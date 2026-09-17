@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 from app.services.mcp_manager import mcp_service
 from app.services.mcp_executor import MCPProcessExecutor
 from app.services.synthesis_service import synthesize_report
+from app.services.agent_service import run_agent
 import os
 
 
@@ -185,4 +186,45 @@ async def local_mission(request: Request, background_tasks: BackgroundTasks):
         "task_id": task_id,
         "status": "QUEUED",
         "message": "Mision local despachada (herramientas + sintesis).",
+    }
+
+
+# =========================================================================
+# MODO AGENTE - El modelo decide que herramientas usar (function calling).
+# El usuario solo escribe en lenguaje natural; el loop lo maneja el backend
+# (no LM Studio), asi se esquiva el timeout. Reutiliza TASKS_DB + polling.
+# =========================================================================
+
+async def run_agentic_mission(task_id: str, body: dict):
+    TASKS_DB[task_id] = {"status": "RUNNING", "report": None}
+    try:
+        prompt = body.get("prompt") or body.get("task") or ""
+        active = mcp_service.get_active_servers()
+        result = await run_agent(prompt, active)
+        TASKS_DB[task_id] = {
+            "status": "COMPLETED",
+            "report": result.get("report", ""),
+            "trace": result.get("trace", []),
+        }
+    except Exception as exc:
+        print(f"[AGENT EXCEPTION] {repr(exc)}")
+        TASKS_DB[task_id] = {"status": "FAILED", "report": f"Error en el agente: {str(exc)}"}
+
+
+@router.post("/agent/execute", status_code=202)
+async def agentic_mission(request: Request, background_tasks: BackgroundTasks):
+    """
+    Modo agente: el usuario escribe en lenguaje natural y el modelo decide que
+    herramientas MCP invocar (de los servers activos) y con que argumentos.
+
+    Body esperado:  { "prompt": "analiza estos tiempos 12,15,340,11,14 y busca anomalias" }
+    """
+    body = await request.json()
+    task_id = str(uuid.uuid4())
+    TASKS_DB[task_id] = {"status": "QUEUED", "report": None}
+    background_tasks.add_task(run_agentic_mission, task_id, body)
+    return {
+        "task_id": task_id,
+        "status": "QUEUED",
+        "message": "Mision agentica despachada (el modelo elige las herramientas).",
     }

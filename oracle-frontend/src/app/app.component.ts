@@ -8,12 +8,6 @@ import { Subscription, interval } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { McpServerManagerComponent } from './components/mcp-server-manager/mcp-server-manager.component';
 
-interface ToolProp {
-  key: string;
-  type: string;
-  required: boolean;
-}
-
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -26,23 +20,14 @@ interface ToolProp {
           <p class="subtitle">Plataforma Autónoma de Ciberseguridad Ofensiva y Hardening</p>
         </div>
         <div class="header-actions">
-          <!-- Botones de Navegación de Vistas -->
-          <button 
-            class="btn-nav-toggle" 
-            [class.active]="currentView === 'mission'"
-            (click)="currentView = 'mission'">
+          <button class="btn-nav-toggle" [class.active]="currentView === 'mission'" (click)="currentView = 'mission'">
             🛡️ Consola Táctica
           </button>
-          <button 
-            class="btn-nav-toggle" 
-            [class.active]="currentView === 'mcp'"
-            (click)="currentView = 'mcp'">
+          <button class="btn-nav-toggle" [class.active]="currentView === 'mcp'" (click)="currentView = 'mcp'">
             ⚙️ Gestor MCP
           </button>
-
-          <!-- Interruptor Global de Voz -->
-          <button 
-            class="btn-audio-toggle" 
+          <button
+            class="btn-audio-toggle"
             (click)="speechService.speechEnabled = !speechService.speechEnabled"
             [class.active]="speechService.speechEnabled"
             title="Activar/Desactivar síntesis de voz">
@@ -59,44 +44,70 @@ interface ToolProp {
       <main class="grid-layout" *ngIf="currentView === 'mission'">
         <section class="control-panel">
           <h2>Consola de Misiones Tácticas</h2>
-          
-          <div class="form-group">
+
+          <!-- Selector de modo -->
+          <div class="mode-selector">
+            <button class="mode-btn" [class.active]="missionMode === 'agent'" (click)="setMode('agent')">
+              🧰 Agente MCP
+            </button>
+            <button class="mode-btn" [class.active]="missionMode === 'infra'" (click)="setMode('infra')">
+              🛰️ Infraestructura
+            </button>
+          </div>
+
+          <!-- Objetivo: solo relevante para auditoría de infraestructura -->
+          <div class="form-group" *ngIf="missionMode === 'infra'">
             <label>Objetivo / Host / Contenedor</label>
             <input [(ngModel)]="targetIp" placeholder="127.0.0.1" />
           </div>
 
+          <!-- Herramientas activas (modo agente) -->
+          <div class="active-tools-hint" *ngIf="missionMode === 'agent'">
+            <span class="hint-label">Servidores activos:</span>
+            <ng-container *ngIf="activeServersList.length > 0; else noTools">
+              <span *ngFor="let s of activeServersList" class="tool-chip">{{ s }}</span>
+            </ng-container>
+            <ng-template #noTools>
+              <span class="no-tools">Ninguno. Actívalos en el Gestor MCP →</span>
+            </ng-template>
+          </div>
+
           <div class="form-group">
             <div class="label-with-mic">
-              <label>Descripción de la Misión / Prompt</label>
-              <button 
-                type="button" 
-                class="btn-mic" 
+              <label>{{ missionMode === 'agent' ? 'Qué quieres que haga' : 'Descripción de la Misión / Prompt' }}</label>
+              <button
+                type="button"
+                class="btn-mic"
                 [class.listening]="speechService.isListening"
                 (click)="toggleVoiceCommand()"
                 title="Dictar comando por voz">
                 {{ speechService.isListening ? '🔴 ESCUCHANDO...' : '🎤 COMANDO DE VOZ' }}
               </button>
             </div>
-            <textarea [(ngModel)]="taskDescription" rows="3" placeholder="Ej: Auditoría general de infraestructura..."></textarea>
+            <textarea
+              [(ngModel)]="taskDescription"
+              rows="4"
+              [placeholder]="missionMode === 'agent'
+                ? 'Escribe en lenguaje natural. Ej: Analiza estos tiempos de respuesta 12, 15, 340, 11, 14 y dime si hay algún valor anómalo.'
+                : 'Ej: Auditoría general de infraestructura y contenedores Docker...'">
+            </textarea>
           </div>
 
-          <!-- Módulo de Subida de Archivos -->
-          <app-file-upload 
-            (fileLoaded)="onFileLoaded($event)" 
+          <!-- Subida de archivos: relevante para forense/infra -->
+          <app-file-upload *ngIf="missionMode === 'infra'"
+            (fileLoaded)="onFileLoaded($event)"
             (fileCleared)="onFileCleared()">
           </app-file-upload>
 
           <button class="btn-primary" (click)="runMission()" [disabled]="loading">
             {{ loading
                 ? 'EJECUTANDO ANÁLISIS PROFUNDO...'
-                : (localInvocations.length > 0
-                    ? '⚡ LANZAR MISIÓN LOCAL (' + localInvocations.length + ' tools)'
-                    : 'LANZAR MISIÓN TÁCTICA') }}
+                : (missionMode === 'agent' ? '🧰 LANZAR AGENTE' : '🛰️ LANZAR AUDITORÍA TÁCTICA') }}
           </button>
 
           <!-- Atajos Rápidos -->
           <div class="shortcuts-section">
-            <h3>Atajos Rápidos de Auditoría</h3>
+            <h3>Atajos Rápidos</h3>
             <div class="chips-container">
               <button class="chip" (click)="setShortcut('Auditoría general de infraestructura y Docker')">🐳 Auditoría Docker</button>
               <button class="chip" (click)="setShortcut('Análisis de seguridad del puerto 8000')">🌐 Puerto 8000</button>
@@ -104,77 +115,26 @@ interface ToolProp {
             </div>
           </div>
 
-          <!-- Constructor de Herramientas Locales (Fase 2) -->
-          <div class="local-tools-section">
-            <h3 (click)="toggleLocalTools()" class="collapsible-toggle">
-              ⚡ Herramientas Locales (MCP) {{ showLocalTools ? '▲' : '▼' }}
-              <span *ngIf="localInvocations.length > 0" class="local-count-badge">{{ localInvocations.length }}</span>
-            </h3>
-
-            <div class="local-tools-content" *ngIf="showLocalTools">
-              <p class="local-hint">Ejecuta tools de tus servers MCP y suma sus resultados a la misión. Al lanzar, Gemma sintetizará el reporte sobre ellos.</p>
-
-              <div class="form-group">
-                <label>Servidor</label>
-                <select [(ngModel)]="localSelectedServer" (ngModelChange)="onLocalServerChange()">
-                  <option value="">-- Selecciona --</option>
-                  <option *ngFor="let s of localServers" [value]="s">{{ s }}</option>
-                </select>
-              </div>
-
-              <div *ngIf="isLoadingLocalTools" class="local-hint">⏳ Abriendo sesión MCP y cargando herramientas...</div>
-
-              <div class="form-group" *ngIf="localTools.length > 0">
-                <label>Herramienta ({{ localTools.length }})</label>
-                <select [(ngModel)]="localSelectedTool" (ngModelChange)="onLocalToolChange()">
-                  <option value="">-- Selecciona --</option>
-                  <option *ngFor="let t of localTools" [value]="t.name">{{ t.name }}</option>
-                </select>
-              </div>
-
-              <div *ngIf="localToolDescription" class="local-tool-desc"><small>{{ localToolDescription }}</small></div>
-
-              <div *ngIf="localToolProps.length > 0" class="local-args">
-                <div *ngFor="let prop of localToolProps; trackBy: trackByKey" class="form-group">
-                  <label>{{ prop.key }} <span class="type-tag">{{ prop.type }}</span> <span *ngIf="prop.required" class="req">*</span></label>
-                  <input *ngIf="prop.type !== 'boolean'" [(ngModel)]="localArgs[prop.key]" [placeholder]="placeholderFor(prop.type)">
-                  <label *ngIf="prop.type === 'boolean'" class="checkbox-inline"><input type="checkbox" [(ngModel)]="localArgs[prop.key]"> activar</label>
-                </div>
-              </div>
-
-              <button *ngIf="localSelectedTool" class="btn-add-tool" (click)="addInvocation()">➕ Agregar a la misión</button>
-
-              <div *ngIf="localInvocations.length > 0" class="invocations-list">
-                <div *ngFor="let inv of localInvocations; let i = index" class="invocation-chip">
-                  <span class="inv-text">{{ inv.server_name }} → {{ inv.tool_name }}</span>
-                  <button class="btn-remove-inv" (click)="removeInvocation(i)" title="Quitar">✕</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Guía de Ayuda Colapsable -->
+          <!-- Guía Colapsable -->
           <div class="help-section">
             <h3 (click)="toggleHelp()" class="collapsible-toggle">
-              📖 Guía de Consultas Soportadas {{ showHelp ? '▲' : '▼' }}
+              📖 Guía Rápida {{ showHelp ? '▲' : '▼' }}
             </h3>
             <div class="help-content" *ngIf="showHelp">
               <ul>
-                <li><strong>Auditorías de Red:</strong> Escaneos de puertos y vectores.</li>
-                <li><strong>Hardening:</strong> Validación de privilegios de usuario.</li>
-                <li><strong>Herramientas Locales:</strong> Suma resultados de tus servers MCP a la misión.</li>
-                <li><strong>Análisis de Voz:</strong> Dicta comandos directamente al micro.</li>
+                <li><strong>Agente MCP:</strong> activa servidores en el Gestor MCP y escribe lo que quieres; el modelo elige y usa las herramientas.</li>
+                <li><strong>Infraestructura:</strong> auditoría de red y contenedores mediante el grafo dockerizado.</li>
+                <li><strong>Comando de Voz:</strong> dicta la misión directamente al micrófono.</li>
               </ul>
             </div>
           </div>
         </section>
 
-        <!-- Consola de Salida o Reproductor de Animaciones Manim -->
+        <!-- Consola de Salida -->
         <section class="output-console">
           <div class="console-header">
             <h3>Reporte de Inteligencia / Salida de VIC</h3>
             <div class="console-actions" *ngIf="missionOutput && !loading">
-              <!-- Botón Speaker por demanda con resumen inteligente -->
               <button class="btn-secondary btn-speak-output" (click)="speakOutput()" title="Reproducir reporte en voz alta">
                 🔊 Escuchar Reporte
               </button>
@@ -182,20 +142,16 @@ interface ToolProp {
             </div>
           </div>
           <div class="console-body">
-            <!-- Reproductor de video dinámico con un único archivo maestro 'video.mp4' y texto de marketing -->
             <div *ngIf="loading" class="execution-status-container">
               <video autoplay loop muted playsinline class="manim-video">
                 <source src="assets/animations/video.mp4" type="video/mp4">
                 Tu navegador no soporta reproducción de video táctico.
               </video>
-              
               <div class="terminal-status-box">
                 <p class="status-text status-text-warning">{{ currentStatusText }}</p>
               </div>
             </div>
-
-            <!-- Consola de texto tradicional cuando finaliza (Corregido desbordamiento de texto) -->
-            <pre *ngIf="!loading" class="terminal-report-output">{{ missionOutput || 'Esperando órdenes de misión o archivos adjuntos para iniciar análisis táctico...' }}</pre>
+            <pre *ngIf="!loading" class="terminal-report-output">{{ missionOutput || 'Esperando órdenes de misión...' }}</pre>
           </div>
         </section>
       </main>
@@ -221,6 +177,18 @@ interface ToolProp {
     .grid-layout { display: grid; grid-template-columns: 380px 1fr; gap: 1.5rem; }
     .control-panel, .output-console { background: #0b0f19; border: 1px solid #1e293b; border-radius: 8px; padding: 1.25rem; }
     .control-panel h2 { font-size: 1rem; color: #38bdf8; margin-top: 0; border-bottom: 1px dashed #1e293b; padding-bottom: 0.5rem; }
+
+    /* Selector de modo */
+    .mode-selector { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .mode-btn { flex: 1; background: #020617; border: 1px solid #334155; color: #94a3b8; padding: 0.5rem; font-size: 0.78rem; border-radius: 4px; cursor: pointer; font-family: inherit; font-weight: bold; transition: all 0.2s; }
+    .mode-btn.active { background: rgba(56, 189, 248, 0.18); border-color: #38bdf8; color: #38bdf8; }
+
+    /* Herramientas activas (modo agente) */
+    .active-tools-hint { background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 0.5rem 0.6rem; margin-bottom: 1rem; font-size: 0.72rem; }
+    .hint-label { color: #64748b; text-transform: uppercase; margin-right: 0.4rem; }
+    .tool-chip { display: inline-block; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; padding: 0.05rem 0.4rem; border-radius: 10px; margin: 0.1rem 0.2rem; }
+    .no-tools { color: #facc15; }
+
     .form-group { margin-bottom: 1rem; }
     .label-with-mic { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem; }
     .form-group label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; margin: 0; }
@@ -234,33 +202,16 @@ interface ToolProp {
     .btn-primary:hover { background: #0ea5e9; }
     .btn-primary:disabled { background: #475569; cursor: not-allowed; }
     .shortcuts-section { margin-top: 1.5rem; border-top: 1px solid #1e293b; padding-top: 1rem; }
-    .shortcuts-section h3, .help-section h3, .local-tools-section h3 { font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.5rem; text-transform: uppercase; }
+    .shortcuts-section h3, .help-section h3 { font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.5rem; text-transform: uppercase; }
     .chips-container { display: flex; flex-wrap: wrap; gap: 0.4rem; }
     .chip { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; padding: 0.3rem 0.6rem; font-size: 0.7rem; border-radius: 12px; cursor: pointer; font-family: inherit; transition: all 0.2s; }
     .chip:hover { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }
-    .help-section, .local-tools-section { margin-top: 1rem; border-top: 1px solid #1e293b; padding-top: 0.75rem; }
+    .help-section { margin-top: 1rem; border-top: 1px solid #1e293b; padding-top: 0.75rem; }
     .collapsible-toggle { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.4rem; }
     .collapsible-toggle:hover { color: #38bdf8; }
     .help-content ul { margin: 0.5rem 0 0 1rem; padding: 0; font-size: 0.75rem; color: #94a3b8; }
     .help-content li { margin-bottom: 0.3rem; }
 
-    /* --- Constructor de herramientas locales --- */
-    .local-count-badge { background: #0284c7; color: white; font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 10px; font-weight: bold; }
-    .local-tools-content { margin-top: 0.5rem; }
-    .local-hint { font-size: 0.7rem; color: #64748b; margin: 0 0 0.75rem 0; line-height: 1.4; }
-    .local-tool-desc { background: rgba(56, 189, 248, 0.08); border-left: 2px solid #38bdf8; padding: 0.3rem 0.5rem; margin-bottom: 0.75rem; }
-    .local-tool-desc small { color: #cbd5e1; font-size: 0.7rem; }
-    .type-tag { font-size: 0.6rem; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 0.05rem 0.3rem; border-radius: 3px; }
-    .req { color: #ef4444; font-weight: bold; }
-    .checkbox-inline { font-size: 0.72rem; color: #cbd5e1; display: flex; align-items: center; gap: 0.4rem; text-transform: none; }
-    .btn-add-tool { width: 100%; background: #1e293b; border: 1px solid #38bdf8; color: #38bdf8; padding: 0.5rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; font-family: inherit; font-weight: bold; }
-    .btn-add-tool:hover { background: rgba(56, 189, 248, 0.15); }
-    .invocations-list { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }
-    .invocation-chip { display: flex; justify-content: space-between; align-items: center; background: #020617; border: 1px solid #10b981; border-radius: 4px; padding: 0.3rem 0.5rem; }
-    .inv-text { font-size: 0.72rem; color: #10b981; word-break: break-all; }
-    .btn-remove-inv { background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: bold; padding: 0 0.3rem; }
-
-    .help-section { margin-top: 1rem; }
     .output-console { display: flex; flex-direction: column; }
     .console-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.5rem; margin-bottom: 1rem; }
     .console-header h3 { margin: 0; font-size: 0.9rem; color: #38bdf8; }
@@ -272,105 +223,32 @@ interface ToolProp {
     .console-body { flex: 1; background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 1rem; overflow-y: auto; max-height: 700px; display: flex; flex-direction: column; justify-content: flex-start; align-items: stretch; }
     .btn-nav-toggle { background: #1e293b; border: 1px solid #334155; color: #94a3b8; font-size: 0.75rem; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; font-family: inherit; font-weight: bold; transition: all 0.2s; }
     .btn-nav-toggle.active { background: rgba(56, 189, 248, 0.2); border-color: #38bdf8; color: #38bdf8; }
-    /* Corrección crítica para evitar que el reporte se corte a la derecha */
-    .terminal-report-output { 
-      white-space: pre-wrap; 
-      word-break: break-word; 
-      overflow-x: auto; 
-      color: #00ff66; 
-      margin: 0; 
-      font-size: 0.85rem; 
-      line-height: 1.4; 
-      width: 100%; 
-      text-align: left; 
-    }
-    
-    /* Contenedor dinámico de ejecución con animación táctica */
-    .execution-status-container {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      height: 100%;
-      padding: 1rem;
-      animation: fadeIn 0.4s ease-in-out;
-    }
-
-    .manim-video {
-      width: 100%;
-      max-height: 340px;
-      border-radius: 6px;
-      border: 1px solid #1e293b;
-      object-fit: contain;
-      background: #000;
-      box-shadow: 0 0 20px rgba(0, 242, 255, 0.15);
-    }
-
-    /* Caja de estado con borde y efecto de parpadeo táctico */
-    .terminal-status-box {
-      margin-top: 1rem;
-      background: rgba(2, 6, 23, 0.85);
-      border: 1px solid #facc15;
-      border-radius: 6px;
-      padding: 0.75rem 1.25rem;
-      width: 100%;
-      max-width: 700px;
-      text-align: center;
-      box-shadow: 0 0 12px rgba(250, 204, 21, 0.25);
-    }
-
-    .status-text {
-      font-size: 0.8rem;
-      font-family: 'Courier New', Courier, monospace;
-      margin: 0;
-      font-weight: bold;
-      line-height: 1.4;
-      letter-spacing: 0.5px;
-    }
-
-    .status-text-warning {
-      color: #facc15;
-      text-shadow: 0 0 8px rgba(250, 204, 21, 0.6);
-      animation: terminalPulseWarning 1.8s infinite ease-in-out;
-    }
-
-    @keyframes terminalPulseWarning {
-      0% { opacity: 0.75; text-shadow: 0 0 4px rgba(250, 204, 21, 0.4); }
-      50% { opacity: 1; text-shadow: 0 0 12px rgba(250, 204, 21, 0.9); }
-      100% { opacity: 0.75; text-shadow: 0 0 4px rgba(250, 204, 21, 0.4); }
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+    .terminal-report-output { white-space: pre-wrap; word-break: break-word; overflow-x: auto; color: #00ff66; margin: 0; font-size: 0.85rem; line-height: 1.4; width: 100%; text-align: left; }
+    .execution-status-container { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 1rem; animation: fadeIn 0.4s ease-in-out; }
+    .manim-video { width: 100%; max-height: 340px; border-radius: 6px; border: 1px solid #1e293b; object-fit: contain; background: #000; box-shadow: 0 0 20px rgba(0, 242, 255, 0.15); }
+    .terminal-status-box { margin-top: 1rem; background: rgba(2, 6, 23, 0.85); border: 1px solid #facc15; border-radius: 6px; padding: 0.75rem 1.25rem; width: 100%; max-width: 700px; text-align: center; box-shadow: 0 0 12px rgba(250, 204, 21, 0.25); }
+    .status-text { font-size: 0.8rem; font-family: 'Courier New', Courier, monospace; margin: 0; font-weight: bold; line-height: 1.4; letter-spacing: 0.5px; }
+    .status-text-warning { color: #facc15; text-shadow: 0 0 8px rgba(250, 204, 21, 0.6); animation: terminalPulseWarning 1.8s infinite ease-in-out; }
+    @keyframes terminalPulseWarning { 0% { opacity: 0.75; } 50% { opacity: 1; } 100% { opacity: 0.75; } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   `]
 })
 export class AppComponent implements OnInit, OnDestroy {
   isOnline = false;
-  taskDescription = 'Auditoría general de infraestructura';
+  taskDescription = '';
   targetIp = '127.0.0.1';
   missionOutput = '';
   loading = false;
   showHelp = false;
   fileContentPayload = '';
-  currentStatusText = 'ESTADO (RUNNING)... Gemma procesando razonamiento profundo. VIC analizando vectores de ataque. Este proceso puede tomar varios minutos; el reporte aparecerá inmediatamente al finalizar.';
+  currentStatusText = 'ESTADO (RUNNING)... Gemma procesando razonamiento profundo. VIC analizando. Este proceso puede tomar varios minutos; el reporte aparecerá al finalizar.';
   currentView = 'mission';
+
+  // Modo de misión: 'agent' (el modelo usa las tools) | 'infra' (grafo dockerizado)
+  missionMode: 'agent' | 'infra' = 'agent';
+  activeServersList: string[] = [];
+
   private pollSub?: Subscription;
-
-  // --- Constructor de mision local (fase 2) ---
-  showLocalTools = false;
-  localServers: string[] = [];
-  localSelectedServer = '';
-  localTools: any[] = [];
-  localSelectedTool = '';
-  localArgs: { [key: string]: any } = {};
-  localToolProps: ToolProp[] = [];
-  localToolDescription = '';
-  localInvocations: any[] = [];
-  isLoadingLocalTools = false;
-
 
   constructor(
     private oracleService: OracleService,
@@ -379,7 +257,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.checkHealth();
-
+    this.loadActiveServers();
     setTimeout(() => {
       this.speechService.speak("Sistema VIC activado y listo para operaciones.");
     }, 1000);
@@ -394,113 +272,23 @@ export class AppComponent implements OnInit, OnDestroy {
     });
   }
 
+  loadActiveServers() {
+    this.oracleService.getActiveMcpServers().subscribe({
+      next: (res: any) => { this.activeServersList = Object.keys(res.active_servers || {}); },
+      error: () => { this.activeServersList = []; }
+    });
+  }
+
+  setMode(mode: 'agent' | 'infra') {
+    this.missionMode = mode;
+    if (mode === 'agent') { this.loadActiveServers(); }
+  }
+
   setShortcut(prompt: string) {
     this.taskDescription = prompt;
   }
 
   toggleHelp() { this.showHelp = !this.showHelp; }
-
-  // --- Herramientas locales (fase 2) ---
-
-  trackByKey(index: number, prop: ToolProp): string { return prop.key; }
-
-  toggleLocalTools() {
-    this.showLocalTools = !this.showLocalTools;
-    // Cargamos los servers activos la primera vez que se abre el panel
-    if (this.showLocalTools && this.localServers.length === 0) {
-      this.oracleService.getActiveMcpServers().subscribe({
-        next: (res: any) => { this.localServers = Object.keys(res.active_servers || {}); },
-        error: () => { this.localServers = []; }
-      });
-    }
-  }
-
-  onLocalServerChange() {
-    this.localTools = [];
-    this.localSelectedTool = '';
-    this.localArgs = {};
-    this.localToolProps = [];
-    this.localToolDescription = '';
-    if (!this.localSelectedServer) { return; }
-
-    this.isLoadingLocalTools = true;
-    this.oracleService.listServerTools(this.localSelectedServer).subscribe({
-      next: (res: any) => {
-        this.isLoadingLocalTools = false;
-        if (res.status === 'success') { this.localTools = res.tools || []; }
-      },
-      error: () => { this.isLoadingLocalTools = false; }
-    });
-  }
-
-  onLocalToolChange() {
-    this.localArgs = {};
-    this.localToolProps = [];
-    this.localToolDescription = '';
-
-    const tool = this.localTools.find(t => t.name === this.localSelectedTool);
-    if (!tool) { return; }
-
-    this.localToolDescription = tool.description || '';
-    const schema = tool.input_schema;
-    if (schema && schema.properties) {
-      const required: string[] = schema.required || [];
-      this.localToolProps = Object.keys(schema.properties).map(key => ({
-        key,
-        type: schema.properties[key].type || 'string',
-        required: required.includes(key)
-      }));
-    }
-  }
-
-  placeholderFor(type: string): string {
-    if (type === 'array') { return 'CSV o JSON: 1,2,3'; }
-    if (type === 'integer' || type === 'number') { return 'número'; }
-    return type;
-  }
-
-  addInvocation() {
-    if (!this.localSelectedServer || !this.localSelectedTool) { return; }
-
-    const args: { [key: string]: any } = {};
-    for (const prop of this.localToolProps) {
-      const raw = this.localArgs[prop.key];
-      if (raw === undefined || raw === '') { continue; }
-
-      if (prop.type === 'number' || prop.type === 'integer') {
-        args[prop.key] = Number(raw);
-      } else if (prop.type === 'boolean') {
-        args[prop.key] = !!raw;
-      } else if (prop.type === 'array') {
-        try {
-          args[prop.key] = JSON.parse(raw);
-        } catch {
-          args[prop.key] = String(raw).split(',').map((s: string) => {
-            const n = Number(s.trim());
-            return isNaN(n) ? s.trim() : n;
-          });
-        }
-      } else {
-        args[prop.key] = raw;
-      }
-    }
-
-    this.localInvocations.push({
-      server_name: this.localSelectedServer,
-      tool_name: this.localSelectedTool,
-      arguments: args
-    });
-
-    // Reset del selector de tool para poder agregar otra rapido
-    this.localSelectedTool = '';
-    this.localArgs = {};
-    this.localToolProps = [];
-    this.localToolDescription = '';
-  }
-
-  removeInvocation(i: number) {
-    this.localInvocations.splice(i, 1);
-  }
 
   toggleVoiceCommand() {
     if (this.speechService.isListening) {
@@ -524,34 +312,27 @@ export class AppComponent implements OnInit, OnDestroy {
   onFileLoaded(fileData: { name: string, content: string, isBinary: boolean, rawFile?: File }) {
     if (fileData.isBinary && fileData.rawFile) {
       this.currentStatusText = `[*] Ejecutando análisis heurístico políglota en ${fileData.name}...`;
-
-      // Llamamos al backend FastAPI para analizar los Magic Bytes y apéndices ocultos
       this.oracleService.scanPolyglotFile(fileData.rawFile).subscribe({
         next: (res: any) => {
           let reportText = `### REPORTE FORENSE DE POLYGLOT / MAGIC BYTES\n`;
           reportText += `- **Fichero:** ${res.file}\n`;
           reportText += `- **Tamaño:** ${res.size_bytes} bytes\n`;
           reportText += `- **Amenaza Detectada:** ${res.threat_detected ? '🚨 SÍ (CRÍTICO)' : '✅ NINGUNA'}\n\n`;
-
           if (res.details && res.details.length > 0) {
             reportText += `**Hallazgos Detallados:**\n`;
-            res.details.forEach((detail: string) => {
-              reportText += `* ${detail}\n`;
-            });
+            res.details.forEach((detail: string) => { reportText += `* ${detail}\n`; });
           } else {
-            reportText += `* Estructura de bytes limpia. No se encontraron apéndices sospechosos tras el marcador IEND.\n`;
+            reportText += `* Estructura de bytes limpia. No se encontraron apéndices sospechosos.\n`;
           }
-
           this.missionOutput = reportText;
           this.loading = false;
         },
         error: (err) => {
-          this.missionOutput = `[!] Error ejecutando el escaneo forense en el backend: ${err.message || 'Fallo de red'}`;
+          this.missionOutput = `[!] Error ejecutando el escaneo forense: ${err.message || 'Fallo de red'}`;
           this.loading = false;
         }
       });
     } else {
-      // Archivo de texto plano o script tradicional
       const base64Content = btoa(unescape(encodeURIComponent(fileData.content)));
       this.fileContentPayload = ` [PAYLOAD BASE64: ${fileData.name}] ${base64Content}`;
       this.taskDescription = `Decodifica el payload adjunto del archivo ${fileData.name}, audítalo y genera el reporte de hardening.`;
@@ -574,21 +355,24 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   runMission() {
+    if (!this.taskDescription.trim()) {
+      alert('Escribe la misión antes de lanzar.');
+      return;
+    }
+
     this.loading = true;
-    this.currentStatusText = `ESTADO (RUNNING)... Gemma procesando razonamiento profundo. VIC analizando vectores de ataque. Este proceso puede tomar varios minutos; el reporte aparecerá inmediatamente al finalizar.`;
+    this.currentStatusText = `ESTADO (RUNNING)... Gemma procesando razonamiento profundo. Este proceso puede tomar varios minutos; el reporte aparecerá al finalizar.`;
+    this.speechService.speak("ESTADO RUNNING. Gemma procesando. Espere el reporte.");
+    console.log("🔥 Disparando misión desde Angular... modo:", this.missionMode);
 
-    this.speechService.speak("ESTADO (RUNNING). Gemma procesando razonamiento profundo. Espere el despliegue del reporte.");
-
-    console.log("🔥 Disparando misión desde Angular...");
-
-    // Bifurcacion: si hay tools locales agregadas -> mision local (fase 2);
-    // si no -> mision dockerizada de siempre.
-    if (this.localInvocations.length > 0) {
-      this.oracleService.localMission(this.taskDescription, this.localInvocations).subscribe({
+    if (this.missionMode === 'agent') {
+      // El modelo decide qué herramientas usar a partir del texto natural
+      this.oracleService.agentMission(this.taskDescription).subscribe({
         next: (res: any) => this.handleDispatch(res),
         error: (err) => this.handleDispatchError(err)
       });
     } else {
+      // Auditoría de infraestructura vía grafo dockerizado
       const rawPrompt = this.taskDescription + this.fileContentPayload;
       const finalPrompt = rawPrompt.replace(/[\r\n]+/g, ' ');
       this.oracleService.executeTask(finalPrompt, this.targetIp).subscribe({
@@ -605,7 +389,7 @@ export class AppComponent implements OnInit, OnDestroy {
       this.loading = false;
       return;
     }
-    this.currentStatusText = `ESTADO (RUNNING) [ID: ${taskId}]... Gemma procesando razonamiento profundo. Análisis en curso; el reporte se desplegará al concluir.`;
+    this.currentStatusText = `ESTADO (RUNNING) [ID: ${taskId}]... Análisis en curso; el reporte se desplegará al concluir.`;
     this.startPolling(taskId);
   }
 
@@ -630,14 +414,13 @@ export class AppComponent implements OnInit, OnDestroy {
           }
           this.missionOutput = finalReport || '[!] Reporte vacío.';
           this.loading = false;
-
           if (this.pollSub) this.pollSub.unsubscribe();
         } else if (statusRes.status === 'FAILED') {
           this.missionOutput = `[!] Fallo en la misión: ${statusRes.report}`;
           this.loading = false;
           if (this.pollSub) this.pollSub.unsubscribe();
         } else {
-          this.currentStatusText = `ESTADO (${statusRes.status})... Gemma procesando razonamiento profundo. Misión en ejecución activa.`;
+          this.currentStatusText = `ESTADO (${statusRes.status})... Gemma procesando. Misión en ejecución activa.`;
         }
       },
       error: (err) => {
