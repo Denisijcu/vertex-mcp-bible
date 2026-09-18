@@ -927,7 +927,7 @@ Hemos llegado al final de esta edición de la Vertex MCP Bible, pero en las trin
 
 &nbsp;
 
-\#\#\# 10.1 Las Lecciones de Trinchera
+\#\#\# 14.1 Las Lecciones de Trinchera
 
 &nbsp;
 
@@ -939,7 +939,7 @@ Hemos llegado al final de esta edición de la Vertex MCP Bible, pero en las trin
 
 &nbsp;
 
-\#\#\# 10.2 El Legado para el Futuro
+\#\#\# 14.2 El Legado para el Futuro
 
 &nbsp;
 
